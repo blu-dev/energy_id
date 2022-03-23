@@ -82,7 +82,7 @@ impl DerefMut for FighterKineticEnergyMotion {
 
 impl FighterKineticEnergyMotion {
     /// Calls a MotionModule vtable function to update the trans move speed (2nd)
-    fn update_trans_move_speed_2nd(boma: &mut BattleObjectModuleAccessor) {
+    pub fn update_trans_move_speed_2nd(boma: &mut BattleObjectModuleAccessor) {
         unsafe {
             let motion_module = *(boma as *const BattleObjectModuleAccessor as *const u64).add(0x88 / 0x8);
             let motion_module_vtable = *(motion_module as *const *const u64);
@@ -92,7 +92,7 @@ impl FighterKineticEnergyMotion {
     }
 
     /// Checks if the motion (2nd) is updating the kinetic energy
-    fn is_motion_2nd_updating_energy(boma: &mut BattleObjectModuleAccessor) -> bool {
+    pub fn is_motion_2nd_updating_energy(boma: &mut BattleObjectModuleAccessor) -> bool {
         unsafe {
             let motion_module = *(boma as *const BattleObjectModuleAccessor as *const u64).add(0x88 / 0x8);
             let motion_module_vtable = *(motion_module as *const *const u64);
@@ -102,7 +102,7 @@ impl FighterKineticEnergyMotion {
     }
 
     /// Checks if the motion is updating the kinetic energy
-    fn is_main_motion_updating_energy(boma: &mut BattleObjectModuleAccessor) -> bool {
+    pub fn is_main_motion_updating_energy(boma: &mut BattleObjectModuleAccessor) -> bool {
         unsafe {
             let motion_module = *(boma as *const BattleObjectModuleAccessor as *const u64).add(0x88 / 0x8);
             let motion_module_vtable = *(motion_module as *const *const u64);
@@ -111,7 +111,7 @@ impl FighterKineticEnergyMotion {
         }
     }
 
-    fn trans_move_speed_correct(boma: &mut BattleObjectModuleAccessor) -> Vector3f {
+    pub fn trans_move_speed_correct(boma: &mut BattleObjectModuleAccessor) -> Vector3f {
         unsafe {
             let func: extern "C" fn(&mut BattleObjectModuleAccessor) -> energy::Vec3 = std::mem::transmute(MotionModule::trans_move_speed as *const ());
             let vec = func(boma);
@@ -123,7 +123,7 @@ impl FighterKineticEnergyMotion {
         }
     }
 
-    fn trans_move_speed_2nd_correct(boma: &mut BattleObjectModuleAccessor) -> Vector3f {
+    pub fn trans_move_speed_2nd_correct(boma: &mut BattleObjectModuleAccessor) -> Vector3f {
         unsafe {
             let func: extern "C" fn(&mut BattleObjectModuleAccessor) -> energy::Vec3 = std::mem::transmute(MotionModule::trans_move_speed_2nd as *const ());
             let vec = func(boma);

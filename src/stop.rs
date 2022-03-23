@@ -38,6 +38,16 @@ impl DerefMut for FighterKineticEnergyStop {
     }
 }
 
+impl FighterKineticEnergyStop {
+    pub fn get_parent_sum_speed_correct(boma: &mut BattleObjectModuleAccessor, link_no: i32, arg: i32) -> PaddedVec2 {
+        unsafe {
+            let func: extern "C" fn(&mut BattleObjectModuleAccessor, i32, i32) -> energy::Vec3 = std::mem::transmute(LinkModule::get_parent_sum_speed as *const ());
+            let vec = func(boma, link_no, arg);
+            PaddedVec2::new(vec.x, vec.y)
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u32)]
 pub enum EnergyStopResetType {
@@ -122,6 +132,41 @@ pub unsafe extern "Rust" fn update_stop(energy: &mut FighterKineticEnergyStop, b
             }
             break;
         },
+        AirXNormalMax => {
+            let speed = energy.get_speed();
+            let brake = if speed.x.abs() <= WorkModule::get_param_float(boma, smash::hash40("air_speed_x_stable"), 0) {
+                WorkModule::get_param_float(boma, smash::hash40("air_brake_x"), 0)
+            } else {
+                WorkModule::get_param_float(boma, smash::hash40("common"), smash::hash40("fall_brake_x"))
+            };
+            energy.speed_brake = PaddedVec2::new(brake, 0.0);
+        },
+        ItemSwingDash | ItemDashThrow => {
+            if crate::motion::FighterKineticEnergyMotion::is_main_motion_updating_energy(boma) {
+                MotionModule::update_trans_move_speed(boma);
+                let speed = crate::motion::FighterKineticEnergyMotion::trans_move_speed_correct(boma);
+                let lr = PostureModule::lr(boma);
+                let energy_speed = energy.get_speed();
+                let accel = PaddedVec2::new(speed.z - energy_speed.x, speed.y - energy_speed.y);
+                energy.speed_max = PaddedVec2::new(-energy_speed.x, -energy_speed.y);
+                energy.speed_brake = PaddedVec2::zeros();
+                energy.accel = accel;
+            }
+            if energy.reset_type == ItemDashThrow
+            && MotionModule::frame(boma) > WorkModule::get_param_int(boma, smash::hash40("common"), smash::hash40("item_dash_throw_brake_dec_frame")) as f32
+            {
+                let brake = WorkModule::get_param_float(boma, smash::hash40("ground_brake"), 0)
+                                    * WorkModule::get_param_float(boma, smash::hash40("common"), smash::hash40("item_dash_throw_brake_mul"))
+                                    * WorkModule::get_param_float(boma, smash::hash40("common"), smash::hash40("item_dash_throw_brake_dec"));
+                energy.speed_brake = PaddedVec2::new(brake, 0.0);
+            }
+        },
+        CaptureBeetle => {
+            if LinkModule::is_link(boma, *LINK_NO_CAPTURE) {
+                energy.speed = FighterKineticEnergyStop::get_parent_sum_speed_correct(boma, *LINK_NO_CAPTURE, 1);
+                return true;
+            }
+        }
         _ => return false
     }
 
