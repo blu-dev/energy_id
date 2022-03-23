@@ -17,7 +17,7 @@ pub struct KineticEnergyVTable {
     pub deleter: extern "C" fn(*mut KineticEnergy),
     pub unk: extern "C" fn(&mut KineticEnergy, &mut BattleObjectModuleAccessor),
     pub update: extern "C" fn(&mut KineticEnergy, &mut BattleObjectModuleAccessor),
-    pub get_speed: extern "C" fn(&mut KineticEnergy) -> *mut Vector2f,
+    pub get_speed: extern "C" fn(&mut KineticEnergy) -> *mut PaddedVec2,
     pub initialize: extern "C" fn(&mut KineticEnergy, &mut BattleObjectModuleAccessor),
     pub get_some_flag: extern "C" fn(&mut KineticEnergy) -> bool,
     pub set_some_flag: extern "C" fn(&mut KineticEnergy, bool),
@@ -143,7 +143,7 @@ impl KineticEnergy {
         }
     }
 
-    pub fn get_speed<'a>(&'a mut self) -> &'a Vector2f {
+    pub fn get_speed<'a>(&'a mut self) -> &'a mut PaddedVec2 {
         unsafe {
             std::mem::transmute((self.vtable.get_speed)(self))
         }

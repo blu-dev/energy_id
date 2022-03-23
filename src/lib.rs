@@ -3,6 +3,7 @@
 #![feature(simd_ffi)]
 #![feature(asm)]
 mod control;
+mod stop;
 mod energy;
 mod motion;
 
@@ -56,6 +57,7 @@ pub fn main() {
     #[cfg(not(feature = "dev-plugin"))]
     {
         control::install();
+        stop::install();
         motion::install();
     }
 }
