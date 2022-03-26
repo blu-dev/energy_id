@@ -246,8 +246,9 @@ unsafe fn update_hook(energy: &mut FighterKineticEnergyMotion, boma: &mut Battle
 
     // `angle_whole` is the angle to rotate the energy by, regardless of whether or not its reset type is AirTransAngle
     if energy.angle_whole != 0.0 {
-        move_speed.x = move_speed.x * energy.angle_whole.cos() + move_speed.y * energy.angle_whole.sin();
-        move_speed.y = move_speed.y * energy.angle_whole.cos() - move_speed.x * energy.angle_whole.sin();
+        println!("Rotating on angle whole: {}", energy.angle_whole);
+        move_speed.x = move_speed.x * energy.angle_whole.cos() - move_speed.y * energy.angle_whole.sin();
+        move_speed.y = move_speed.y * energy.angle_whole.cos() + move_speed.x * energy.angle_whole.sin();
     }
 
     // PostureModule::lr is used when the animation is looping or when it depends on the fighter's angle, probably because other
@@ -312,10 +313,11 @@ unsafe fn update_hook(energy: &mut FighterKineticEnergyMotion, boma: &mut Battle
         // This multiplies by the angle set with (afaik) app::sv_kinetic_energy::set_angle
         // Set angle whole is used regardless of the energy reset type
         AirTransAngle => {
+            println!("Rotating on angle: {}", energy.angle);
             energy.active_flag = true;
             PaddedVec2::new(
-                move_speed.x * energy.angle.cos() + move_speed.y * energy.angle.sin(),
-                move_speed.y * energy.angle.cos() - move_speed.x * energy.angle.sin()
+                move_speed.x * energy.angle.cos() - move_speed.y * energy.angle.sin(),
+                move_speed.y * energy.angle.cos() + move_speed.x * energy.angle.sin()
             )    
         },
 

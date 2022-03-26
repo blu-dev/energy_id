@@ -9,14 +9,18 @@ use super::{
 pub struct FighterKineticEnergyStop {
     parent: super::energy::KineticEnergy,
     padding: u64,
-    _x90: PaddedVec2,
+    damage_target_speed: PaddedVec2,
     reset_type: EnergyStopResetType,
     elapsed_hitstop_frames: f32,
     hitstop_frames: f32,
     _xAC: f32,
     _xB0: f32,
-    _xB4: u32,
-    _xB8: u16,
+    should_sync_damage_speed: bool,
+    needs_to_sync_damage_speed: bool,
+    should_start_interpolation: bool,
+    interpolation_frames_remaining: u8,
+    _xB8: u8,
+    is_target_pos: bool,
     _xBA: bool,
     _xBB: bool,
     _xBC: u32,
@@ -91,7 +95,189 @@ unsafe extern "C" fn get_battle_object_from_id(id: u32) -> *mut BattleObject;
 pub unsafe extern "Rust" fn update_stop(energy: &mut FighterKineticEnergyStop, boma: &mut BattleObjectModuleAccessor) -> bool {
     use EnergyStopResetType::*;
 
+    let damage_common = |energy: &mut FighterKineticEnergyStop| {
+        let speed = *energy.get_speed();
+        let magnitude = (speed.x.powi(2) + speed.y.powi(2)).sqrt();
+        if magnitude <= 1.0e-05 {
+            energy.accel = PaddedVec2::zeros();
+            true
+        } else {
+            false
+        }
+    };
+
+    let is_damage_status = |status: i32| {
+        [
+            *FIGHTER_STATUS_KIND_DAMAGE,
+            *FIGHTER_STATUS_KIND_DAMAGE_AIR,
+            *FIGHTER_STATUS_KIND_DAMAGE_FLY,
+            *FIGHTER_STATUS_KIND_DAMAGE_FLY_ROLL,
+            *FIGHTER_STATUS_KIND_DAMAGE_FLY_METEOR,
+            *FIGHTER_STATUS_KIND_DAMAGE_FLY_REFLECT_LR,
+        ].contains(&status)
+    };
+
+    let is_saving_knockback_status = |status: i32| {
+        [
+            *FIGHTER_STATUS_KIND_SAVING_DAMAGE,
+            *FIGHTER_STATUS_KIND_SAVING_DAMAGE_AIR,
+            *FIGHTER_STATUS_KIND_BURY
+        ].contains(&status)
+    };
+
+    let handle_processing_damage = |energy: &mut FighterKineticEnergyStop, boma: &mut BattleObjectModuleAccessor, speed: f32, brake: f32| {
+        if 0.0 <= speed - brake {
+            let multiplier = (speed - brake) / speed - 1.0;
+            energy.accel = PaddedVec2::new(
+                energy.get_speed().x * multiplier,
+                energy.get_speed().y * multiplier
+            );
+        } else if energy.reset_type == AirBrakeAlways {
+            let speed = *energy.get_speed();
+            let mut speed = PaddedVec2::new(-speed.x, speed.y);
+            if 0.0 < speed.x {
+                speed.x = speed.x - energy.speed_max.x;
+            }
+            if speed.x < 0.0 {
+                speed.x += energy.speed_max.x;
+            }
+
+            if 0.0 < speed.y {
+                speed.y -= energy.speed_max.y;
+            }
+            if speed.y < 0.0 {
+                speed.y += energy.speed_max.y;
+            }
+
+            energy.accel = speed;
+        } else {
+            energy.accel = PaddedVec2::zeros();
+            energy.speed = PaddedVec2::zeros();
+        }
+    };
+
     match energy.reset_type {
+        DamageGround | DamageAir | DamageAirOrbit => loop {
+            if damage_common(energy) { break; }
+            
+
+            if energy.needs_to_sync_damage_speed {
+                let speed_mul = WorkModule::get_param_float(boma, smash::hash40("battle_object"), smash::hash40("damage_sync_speed_mul"));
+                let speed = energy.get_speed();
+                speed.x *= speed_mul;
+                speed.y *= speed_mul;
+                energy.needs_to_sync_damage_speed = false;
+            }
+
+            if energy.should_sync_damage_speed {
+                energy.should_sync_damage_speed = false;
+                energy.needs_to_sync_damage_speed = true;
+            }
+
+            if energy.interpolation_frames_remaining > 0 {
+                energy.speed = PaddedVec2::new(
+                    energy.speed.x + (energy.damage_target_speed.x - energy.speed.x) / energy.interpolation_frames_remaining as f32,
+                    energy.speed.y + (energy.damage_target_speed.y - energy.speed.y) / energy.interpolation_frames_remaining as f32
+                );
+                energy.interpolation_frames_remaining -= 1;
+            }
+
+            if energy.should_start_interpolation {
+                energy.interpolation_frames_remaining = WorkModule::get_param_int(boma, smash::hash40("common"), smash::hash40("damage_pull_speed_intp_frame")) as u8;
+                energy.should_start_interpolation = false;
+            }
+
+            let should_speed_up = if !WorkModule::is_flag(boma, *FIGHTER_INSTANCE_WORK_ID_FLAG_UP_SPEED_DAMAGE) {
+                let status = StatusModule::status_kind(boma);
+                if (is_damage_status(status) && WorkModule::is_flag(boma, *FIGHTER_STATUS_DAMAGE_FLAG_ELEC)) || is_saving_knockback_status(status) {
+                    WorkModule::get_int(boma, *FIGHTER_STATUS_DAMAGE_WORK_INT_HIT_STOP_FRAME) != 0
+                } else {
+                    StopModule::is_damage(boma)
+                }
+            } else {
+                true
+            };
+
+            let damage_air_brake = WorkModule::get_param_float(boma, smash::hash40("common"), smash::hash40("damage_air_brake"));
+
+            let is_grounded = if !should_speed_up && energy.reset_type != DamageAirOrbit && StatusModule::situation_kind(boma) == *SITUATION_KIND_GROUND {
+                let brake = WorkModule::get_param_float(boma, smash::hash40("ground_brake"), 0) * WorkModule::get_param_float(boma, smash::hash40("common"), smash::hash40("damage_ground_mul"));
+                energy.speed_brake = PaddedVec2::new(brake, 0.0);
+                energy.accel = PaddedVec2::zeros();
+                let speed_limit = WorkModule::get_param_float(boma, smash::hash40("battle_object"), smash::hash40("damage_speed_limit"));
+                if [*FIGHTER_STATUS_KIND_DAMAGE_FLY, *FIGHTER_STATUS_KIND_DAMAGE_FLY_ROLL, *FIGHTER_STATUS_KIND_DAMAGE_FLY_METEOR, *FIGHTER_STATUS_KIND_SAVING_DAMAGE_FLY].contains(&StatusModule::status_kind(boma)) {
+                    energy.speed_limit = PaddedVec2::new(speed_limit, speed_limit);
+                } else {
+                    energy.speed_limit = PaddedVec2::new(speed_limit, 0.0);
+                }
+
+                let pos = if energy.get_speed().x <= 0.0 {
+                    *GROUND_TOUCH_FLAG_LEFT
+                } else {
+                    *GROUND_TOUCH_FLAG_RIGHT
+                };
+
+                if GroundModule::get_touch_pos(boma, pos as u32) & 1 != 0 {
+                    energy.speed = PaddedVec2::zeros();
+                }
+                true
+            } else {
+                let damage_air_brake = damage_air_brake;
+                energy.speed_brake = PaddedVec2::zeros();
+                energy.speed_limit = PaddedVec2::new(-1.0, -1.0);
+                false
+            };
+            if energy.is_target_pos {
+                if energy._xB8 > 0 {
+                    energy._xB8 -= 1;
+                    if is_grounded {
+                        break;
+                    }
+                    handle_processing_damage(energy, boma, 0.0, damage_air_brake);
+                    break;
+                }
+
+                let speed_limit = WorkModule::get_param_float(boma, smash::hash40("battle_object"), smash::hash40("damage_target_pos_speed_limit"));
+                let speed = *energy.get_speed();
+                let magnitude = (speed.x.powi(2) + speed.y.powi(2)).sqrt();
+                if speed_limit < magnitude {
+                    let new_speed = if magnitude != 0.0 {
+                        PaddedVec2::new(
+                            speed.x.powi(2) / magnitude.sqrt(),
+                            speed.y.powi(2) / magnitude.sqrt()
+                        )
+                    } else {
+                        PaddedVec2::new(
+                            speed.x.powi(2),
+                            speed.y.powi(2)
+                        )
+                    };
+                    *energy.get_speed() = new_speed;
+                }
+                energy.is_target_pos = false;
+                energy._xB8 = 0;
+            }
+            if is_grounded {
+                break;
+            }
+
+            let mag = energy.get_speed().mag();
+            handle_processing_damage(energy, boma, mag, damage_air_brake);
+
+            break;
+        },
+        DamageAirIce => {
+            if StatusModule::situation_kind(boma) == *SITUATION_KIND_GROUND {
+                let brake = WorkModule::get_param_float(boma, smash::hash40("common"), smash::hash40("damage_ground_mul"))
+                                    * WorkModule::get_param_float(boma, smash::hash40("ground_brake"), 0);
+                
+                energy.speed_brake = PaddedVec2::new(brake, 0.0);
+                energy.accel = PaddedVec2::zeros();
+                energy.speed_limit = PaddedVec2::new(WorkModule::get_param_float(boma, smash::hash40("battle_object"), smash::hash40("damage_speed_limit")), 0.0);
+            }
+        },
+        ShieldRebound => return true, // case 0x16
+        AirBrake | AirBrakeAlways => return true, // default
         DamageKnockBack => loop {
             if 0.0 >= energy.hitstop_frames {
                 break;
@@ -166,7 +352,7 @@ pub unsafe extern "Rust" fn update_stop(energy: &mut FighterKineticEnergyStop, b
                 energy.speed = FighterKineticEnergyStop::get_parent_sum_speed_correct(boma, *LINK_NO_CAPTURE, 1);
                 return true;
             }
-        }
+        },
         _ => return false
     }
 
@@ -444,11 +630,11 @@ pub unsafe extern "Rust" fn setup_stop(energy: &mut FighterKineticEnergyStop, re
             break;
         },
         AirLassoHang => {
-            energy._x90 = *initial_speed;
+            energy.damage_target_speed = *initial_speed;
         },
         EscapeAirSlide => {
             let energy_speed = *energy.get_speed();
-            energy._x90 = *initial_speed;
+            energy.damage_target_speed = *initial_speed;
             let speed = WorkModule::get_param_float(boma, smash::hash40("escape_air_slide_speed"), 0);
             let accel = WorkModule::get_param_float(boma, smash::hash40("escape_air_slide_accel"), 0);
             energy.speed = PaddedVec2::new(energy_speed.x * speed, energy_speed.y * speed);
@@ -461,7 +647,11 @@ pub unsafe extern "Rust" fn setup_stop(energy: &mut FighterKineticEnergyStop, re
     energy.initialize(boma);
     energy._xBA = false;
     energy._xB8 = 0;
-    energy._xB4 = 0;
+    energy.is_target_pos = false;
+    energy.should_sync_damage_speed = false;
+    energy.needs_to_sync_damage_speed = false;
+    energy.should_start_interpolation = false;
+    energy.interpolation_frames_remaining = 0;
 
     true
 }
